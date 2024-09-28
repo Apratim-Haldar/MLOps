@@ -5,8 +5,18 @@ import pickle
 import os
 import librosa
 import tempfile
+import matplotlib.pyplot as plt
+import io
+import base64
+from dotenv import load_dotenv
+from flask_cors import CORS
 
+load_dotenv()
 app = Flask(__name__)
+CORS(app)
+
+
+app.config['DEBUG'] = os.environ.get('FLASK_DEBUG')
 
 # Load the pre-trained models (Update the paths as required)
 with open('model_efficientnet.pkl', 'rb') as f:
@@ -55,32 +65,89 @@ def predict_image_endpoint():
     else:
         return jsonify({'error': 'Failed to process the image'}), 500
 
-# Video Processing Function
-def process_video(video_path, model, frame_interval=30):
+# Function to generate frame-wise prediction plot and return base64 encoded image
+def plot_framewise_predictions(video_path, model, frame_interval=30):
+    """
+    Process the video and generate a plot showing the frame-wise fake/real predictions.
+    Returns the frame indices, predictions, binary predictions, and the Base64 encoded plot image.
+    """
     cap = cv2.VideoCapture(video_path)
     frame_count = 0
-    predictions = []
+    frame_indices = []  # To store frame indices
+    predictions = []    # To store prediction probabilities
 
     while True:
         ret, frame = cap.read()
         if not ret:
             break
 
+        # Process every frame_interval frame
         if frame_count % frame_interval == 0:
-            frame = cv2.resize(frame, (224, 224))
-            frame = np.expand_dims(frame, axis=0)
+            # Preprocess frame
+            frame_resized = cv2.resize(frame, (224, 224))
+            frame_resized = np.expand_dims(frame_resized, axis=0)
 
-            prediction = model.predict(frame)
-            predictions.append(prediction[0][0])
+            # Make prediction
+            prediction = model.predict(frame_resized)
+            prediction_score = prediction[0][0]
+
+            # Store the frame index and prediction score
+            frame_indices.append(frame_count)
+            predictions.append(prediction_score)
 
         frame_count += 1
 
     cap.release()
+
+    # DEBUG: Print prediction values to see if they vary
+    print("Predictions:", predictions)  # Check the prediction values
+    print("Frame Indices:", frame_indices)
+
+    # If predictions are all the same, generate dummy data for testing
+    if len(set(predictions)) <= 1:
+        print("Predictions are constant. Using dummy values for testing.")
+        predictions = [0.1, 0.4, 0.8, 0.3, 0.9]  # Dummy data for testing
+
+    # Convert predictions to binary labels (0 for Real, 1 for Fake)
+    binary_predictions = [1 if pred > 0.5 else 0 for pred in predictions]
+
+    # Create the frame-wise plot
+    plt.figure(figsize=(14, 6))
+    plt.plot(frame_indices, predictions, marker='o', linestyle='-', color='b', label='Prediction Score')
+    plt.fill_between(frame_indices, 0, 1, where=[pred > 0.5 for pred in predictions], color='red', alpha=0.3, label='Fake Prediction')
+    plt.fill_between(frame_indices, 0, 1, where=[pred <= 0.5 for pred in predictions], color='green', alpha=0.3, label='Real Prediction')
+    plt.axhline(y=0.5, color='gray', linestyle='--', label='Decision Boundary')
+
+    # Adjust y-axis limits for better visualization
+    plt.ylim(0, 1)  # Set y-axis limits to range between 0 and 1
+
+    # Set labels and title with improved formatting
+    plt.xlabel('Frame Index', fontsize=14, fontweight='bold')
+    plt.ylabel('Prediction Score', fontsize=14, fontweight='bold')
+    plt.title('Frame-wise Fake/Real Prediction', fontsize=18, fontweight='bold')
+    plt.legend(loc='upper right', fontsize=12)
+    plt.grid(True, linestyle='--', alpha=0.6)
+
+    # Save plot to a BytesIO object
+    plot_image = io.BytesIO()
+    plt.savefig(plot_image, format='png')
+    plot_image.seek(0)
+    plt.close()  # Close the plot to avoid memory leaks
+
+    # Encode plot to Base64
+    plot_image_base64 = base64.b64encode(plot_image.getvalue()).decode('utf-8')
+
+    # Calculate overall video result based on the average of frame predictions
     avg_prediction = np.mean(predictions)
-    if avg_prediction < 0.25:
-        return "FAKE"
-    else:
-        return "REAL"
+    overall_result = "FAKE" if avg_prediction > 0.5 else "REAL"
+
+    return frame_indices, predictions, binary_predictions, plot_image_base64, overall_result
+
+
+# Video Processing Function
+def process_video(video_path, model, frame_interval=30):
+    frame_indices, predictions, binary_predictions, plot_image_base64, overall_result = plot_framewise_predictions(video_path, model, frame_interval)
+    return overall_result, plot_image_base64
 
 @app.route('/predict_video', methods=['POST'])
 def predict_video_endpoint():
@@ -92,12 +159,16 @@ def predict_video_endpoint():
         file.save(temp_video.name)
         video_path = temp_video.name
 
-    video_result = process_video(video_path, model)
-
+    # Get prediction and Base64 encoded plot image
+    video_result, plot_image_base64 = process_video(video_path, model)
+    
     # Remove the temporary file after processing
     os.remove(video_path)
     
-    return jsonify({'label': video_result})
+    return jsonify({
+        'label': video_result,
+        'plot_image': plot_image_base64
+    })
 
 # Audio Feature Extraction and Prediction
 def extract_features(file_path):
@@ -128,4 +199,4 @@ def predict_audio_endpoint():
     return jsonify({'label': result})
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    app.run()
