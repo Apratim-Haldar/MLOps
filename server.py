@@ -15,9 +15,10 @@ load_dotenv()
 app = Flask(__name__)
 CORS(app)
 
-
-app.config['DEBUG'] = os.environ.get('FLASK_DEBUG')
-
+@app.route('/predict_image', methods=['GET'])
+def welcome():
+    return jsonify({"Welcome to the Deep End !"})
+    
 # Load the pre-trained models (Update the paths as required)
 with open('model_efficientnet.pkl', 'rb') as f:
     model = pickle.load(f)
