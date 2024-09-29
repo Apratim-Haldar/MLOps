@@ -14,10 +14,6 @@ from flask_cors import CORS
 load_dotenv()
 app = Flask(__name__)
 CORS(app)
-
-@app.route('/predict_image', methods=['GET'])
-def welcome():
-    return jsonify({"Welcome to the Deep End !"})
     
 # Load the pre-trained models (Update the paths as required)
 with open('model_efficientnet.pkl', 'rb') as f:
@@ -26,6 +22,9 @@ with open('model_efficientnet.pkl', 'rb') as f:
 with open('audio_model.pkl', 'rb') as f:
     audio_model = pickle.load(f)
 
+@app.route('/', methods=['GET'])
+def welcome():
+    return jsonify({"Welcome to the Deep End !"})
 # Image Prediction Function
 def predict_image(image_path, model):
     img = cv2.imread(image_path)
